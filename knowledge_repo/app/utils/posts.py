@@ -4,12 +4,13 @@ Functions include:
     - get_posts
     - get_all_post_stats
 """
+import math
 from flask import current_app
 from sqlalchemy import func, distinct, or_
 
 from ..app import db_session
 from ..models import (Comment, PageView, Post,
-                      Tag, Vote)
+                      Tag, Vote, User)
 
 
 def get_query_param_set(params):
@@ -44,12 +45,14 @@ def get_posts(feed_params):
     if filters and str(filters):
         filter_set = get_query_param_set(filters)
         for elem in filter_set:
-            query = query.filter(or_(Post.title.like('%' + elem + '%'),
-                                     Post.title.like('%' + elem),
-                                     Post.title.like(elem + '%'),
-                                     Post.tldr.like('%' + elem + '%'),
-                                     Post.tldr.like('%' + elem),
-                                     Post.tldr.like(elem + '%')))
+            query = query.filter(or_(func.lower(Post.keywords).like('%' + elem + '%'),
+                                     func.lower(Post.keywords).like('%' + elem),
+                                     func.lower(Post.keywords).like(elem + '%')))
+
+    author_names = feed_params['authors']
+    if author_names:
+        author_names = [author_name.strip() for author_name in author_names.split(",")]
+        query = query.filter(Post.authors.any(User.username.in_(author_names)))
 
     # sort - TODO clean up
     sort_by = feed_params['sort_by']
@@ -100,14 +103,9 @@ def get_posts(feed_params):
     if posts and not isinstance(posts[0], Post):
         posts = [post[0] for post in posts]
 
-    # Filter by authors TODO: this should be done by a hybrid_property
-    author_names = feed_params['authors']
-    if author_names:
-        author_names = set(author_names.split(','))
-        posts = [p for p in posts if author_names.intersection(
-            set([auth.username for auth in p.authors]))]
-
     # get the right indexes
+    feed_params['posts_count'] = len(posts)
+    feed_params['page_count'] = int(math.ceil(float(len(posts)) / feed_params['results']))
     posts = posts[feed_params['start']:feed_params[
         'start'] + feed_params['results']]
 

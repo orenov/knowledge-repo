@@ -39,13 +39,14 @@ class DbKnowledgeRepository(KnowledgeRepository):
         postref_table = Table(table_name, metadata,
                               Column('id', Integer, primary_key=True),
                               Column('created_at', DateTime, default=func.now()),
+                              Column('updated_at', DateTime, default=func.now(), onupdate=func.current_timestamp()),
                               Column('uuid', String(512)),
                               Column('path', String(512)),
                               Column('revision', Integer, default=0),
                               Column('status', Integer, default=self.PostStatus.DRAFT.value),
                               Column('ref', String(512)),
                               Column('data', LargeBinary))
-        self.engine = create_engine(engine_uri)
+        self.engine = create_engine(engine_uri, pool_recycle=3600)
         self.session = scoped_session(sessionmaker(bind=self.engine))
         if auto_create:
             postref_table.create(self.engine, checkfirst=True)
@@ -64,7 +65,7 @@ class DbKnowledgeRepository(KnowledgeRepository):
 
     @property
     def revision(self):
-        return str(self.session.query(func.max(self.PostRef.created_at)).first()[0])
+        return str(self.session.query(func.max(self.PostRef.updated_at)).first()[0])
 
     def update(self):
         pass
@@ -204,15 +205,15 @@ class DbKnowledgeRepository(KnowledgeRepository):
         return data
 
     def _kp_dir(self, path, parent=None, revision=None):
-        if parent:
-            path = posixpath.join(path, parent)
+        ref_prefix = parent + '/' if parent else ''
         revision = revision or self._kp_get_revision(path, enforce_exists=True)
         refs = (self.session.query(self.PostRef.ref)
                             .filter(self.PostRef.path == path)
+                            .filter(self.PostRef.ref.like(ref_prefix + '%'))
                             .filter(self.PostRef.revision == revision)).all()
         for (ref,) in refs:
             if ref is not None:
-                yield ref
+                yield posixpath.relpath(ref, parent or '')
 
     def _kp_has_ref(self, path, reference, revision=None):
         revision = revision or self._kp_get_revision(path, enforce_exists=True)

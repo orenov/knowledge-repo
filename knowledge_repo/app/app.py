@@ -3,16 +3,19 @@ import os
 import imp
 import logging
 import traceback
+import math
 
 from flask import Flask, current_app, render_template, g, request
 from flask_mail import Mail
 from flask_migrate import Migrate
 from alembic import command
 from alembic.migration import MigrationContext
+from datetime import datetime
+from werkzeug import url_encode
 
 import knowledge_repo
 from .proxies import db_session, current_repo
-from .index import update_index, time_since_index, time_since_index_check
+from .index import update_index, time_since_index, time_since_index_check, _update_index
 from .models import db as sqlalchemy_db, Post, User, Tag
 from . import routes
 
@@ -69,21 +72,27 @@ class KnowledgeFlask(Flask):
             self.config['mail'] = Mail(self)
 
         # Set config defaults if not included
+        # WEB_EDITOR_PREFIXES: Prefixes of repositories that can be edited via the web editor UI
+        # Defaults to no prefixes allowed. If None, all prefixes editable via the UI.
         server_config_defaults = {'SERVER_NAME': 'localhost',
-                                  'plugins': []}
+                                  'plugins': [],
+                                  'WEB_EDITOR_PREFIXES': []}
         for k, v in server_config_defaults.items():
             self.config[k] = self.config.get(k, v)
 
         # Register routes to be served
-        self.register_blueprint(routes.render.blueprint)
+        self.register_blueprint(routes.posts.blueprint)
         self.register_blueprint(routes.health.blueprint)
         self.register_blueprint(routes.index.blueprint)
         self.register_blueprint(routes.tags.blueprint)
         self.register_blueprint(routes.vote.blueprint)
         self.register_blueprint(routes.comment.blueprint)
         self.register_blueprint(routes.stats.blueprint)
-        self.register_blueprint(routes.web_editor.blueprint)
+        self.register_blueprint(routes.editor.blueprint)
         self.register_blueprint(routes.groups.blueprint)
+
+        if self.config['DEBUG']:
+            self.register_blueprint(routes.debug.blueprint)
 
         # Register error handler
         @self.errorhandler(500)
@@ -147,6 +156,51 @@ class KnowledgeFlask(Flask):
                         last_index=time_since_index(human_readable=True),
                         last_index_check=time_since_index_check(human_readable=True))
 
+        @self.template_global()
+        def modify_query(**new_values):
+            args = request.args.copy()
+
+            for key, value in new_values.items():
+                args[key] = value
+
+            return '{}?{}'.format(request.path, url_encode(args))
+
+        @self.template_global()
+        def pagination_pages(current_page, page_count, max_pages=5, extremes=True):
+            page_min = int(max(1, current_page - math.floor(1.0 * max_pages // 2)))
+            page_max = int(min(page_count, current_page + math.floor(1.0 * max_pages / 2)))
+
+            to_acquire = max_pages - (page_max - page_min + 1)
+
+            while to_acquire > 0 and page_min > 1:
+                page_min -= 1
+                to_acquire -= 1
+            while to_acquire > 0 and page_max < page_count:
+                page_max += 1
+                to_acquire -= 1
+
+            pages = list(range(page_min, page_max + 1))
+            if extremes:
+                if 1 not in pages:
+                    pages[0] = 1
+                if page_count not in pages:
+                    pages[-1] = page_count
+            return pages
+
+        @self.template_filter('format_date')
+        def format_date(date):
+            """
+            This will be a Jinja filter that string formats a datetime object.
+            If we can't correctly format, we just return the object.
+            :type date: Datetime
+            :return: A string of the format of YYYY-MM-DD
+            :rtype: String
+            """
+            try:
+                return datetime.strftime(date, '%Y-%m-%d')
+            except:
+                return date
+
     @property
     def repository(self):
         return getattr(self, '_repository')
@@ -189,6 +243,10 @@ class KnowledgeFlask(Flask):
     def db_migrate(self, message, autogenerate=True):
         with self.app_context():
             command.revision(self._alembic_config, message=message, autogenerate=autogenerate)
+
+    def db_update_index(self, reindex=True):
+        with self.app_context():
+            _update_index(current_app, force=True, reindex=reindex)
 
     @property
     def supports_threads(self):

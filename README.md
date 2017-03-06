@@ -1,5 +1,6 @@
 # The Knowledge Repository (BETA)
 [![Build Status](https://travis-ci.org/airbnb/knowledge-repo.svg?branch=master)](https://travis-ci.org/airbnb/knowledge-repo)
+[![Windows Build Status](https://ci.appveyor.com/api/projects/status/t88a27n099oqnbsw/branch/master?svg=true&pendingText=Windows%20build%20pending...&passingText=Windows%20build%20passing&failingText=Windows%20build%20failing)](https://ci.appveyor.com/project/matthewwardrop/knowledge-repo)
 [![PyPI version](https://badge.fury.io/py/knowledge-repo.svg)](https://badge.fury.io/py/knowledge-repo)
 [![Python](https://img.shields.io/pypi/pyversions/knowledge-repo.svg?maxAge=2592000)](https://pypi.python.org/pypi/knowledge-repo)
 
@@ -19,6 +20,8 @@ Check out this [Medium Post](https://medium.com/airbnb-engineering/scaling-knowl
 ```
 pip install  --upgrade knowledge-repo
 ```
+
+To install dependencies for iPython notebook, PDF uploading, and local development, use `pip install --upgrade knowledge-repo[all]`
 
 2\. Initialize a knowledge repository - your posts will get added here
 ```
@@ -94,6 +97,8 @@ tldr: This is short description of the content and findings of the post.
 ---
 ```
 
+*See a full description of headers [further below](https://github.com/airbnb/knowledge-repo#post-headers)*
+
 Users add these notebooks/files to the knowledge repository through the `knowledge_repo` tool, as described below; which allows them to be rendered and curated in the knowledge repository's web app.
 
 If your favourite format is missing, we welcome contributions; and are happy to work with you to get it supported. See the "Contributing" section below to see how to add support for more formats.
@@ -122,7 +127,7 @@ The `knowledge_repo` script is the one that is used for all of the following act
 
 You can drop the `--repo` option by setting the `$KNOWLEDGE_REPO` environment variable with the location of the  knowledge data repo in your bash/zsh/shell configuration. In bash, this would be done as such:
 ```
-export $KNOWLEDGE_REPO=repo_path
+export KNOWLEDGE_REPO=repo_path
 ```
 
 ### Setup of the knowledge data repositories
@@ -158,7 +163,16 @@ There are two types of configuration files, one for knowledge-data git repos tha
 
 When running `knowledge_repo init` to make a folder a knowledge-data git repo, a `.knowledge_repo_config` file will be created in the folder. The file will be a copy of the default repo configuration file located [here](https://github.com/airbnb/knowledge-repo/blob/master/knowledge_repo/config_defaults.py).
 
-This configuration file will allow you to add postprocessors to post contributions from the repo, add rules for which subdirectories posts can be added to, and check the format of author names at contribution time. See the file itself for more detail.
+This configuration file will allow you to:
+
+ - Add postprocessors to post contributions from the repo. (see the `postprocessors` array of functions)
+ - Add rules for which subdirectories posts can be added to. (see the `path_parse()` function)
+ - Check and manage the format of author names at contribution time
+    - Add logic to `username_parse()` to check post author names and raise exceptions when they don't match
+    - Add logic to `username_to_name()` to manage how user/author names are displayed, ex. "sally_smarts" --> "Sally Smarts"
+    - Add logic to `username_to_email()` to manage how user/author names are matched to emails, ex. "sally_smarts" --> "sally.smarts@mycompany.com"
+
+See the file itself for more detail.
 
 #### Knowledge Web Application Configuration
 
@@ -256,11 +270,37 @@ In this case, we would run:
 knowledge_repo --repo knowledge_data_repo submit knowledge_data_repo/projects/test_knowledge.kp
 ```
 
+### Post Headers
+
+Here is a full list of headers used in the YAML section of knowledge posts:
+
+|header         |required |purpose                                                                            |example                                                                                   |
+|:--------------|:--------|:----------------------------------------------------------------------------------|:-----------------------------------------------------------------------------------------|
+|title          |required |String at top of post                                                              |title: This post proves that 2+2=4                                                               |
+|authors        |required |User entity that wrote the post in organization specified format                   |authors: <br> - kanye_west<br> - beyonce_knowles                                          |
+|tags           |required |Topics, projects, or any other uniting principle across posts                      |tags: <br> - hiphop<br> - yeezy                                                           |
+|created_at     |required |Date when post was written                                                         |created_at: 2016-04-03                                                                    |
+|updated_at     |optional |Date when post was last updated                                                    |created_at: 2016-10-10                                                                    |
+|tldr           |required |Summary of post takeaways that will be visible in /feed                            |tldr: I'ma let you finish, but Beyonce had one of the best videos of all time!            |
+|path           |optional |Instead of specifying post path in the CLI, specify with this post header          |path: projects/path/to/post/on/repo                                                       |
+|thumbnail      |optional |Specify which image is shown in /feed                                              |thumbnail: 3 OR thumbnail: http://cdn.pcwallart.com/images/giraffe-tongue-wallpaper-1.jpg |
+|private        |optional |If included, post is only visible to authors and editors set in repo configuration |private: true                                                                             |
+|allowed_groups |optional |If the post is private, specify additional users or groups who can see the post    |allowed_groups: ['jay_z', 'taylor_swift', 'rap_community']                                |
+
 ### Handling Images
 
 The knowledge repo's default behavior is to add the markdown's contents as is to your knowledge post git repository. If you do not have git LFS set up, it may be in your interest to have these images hosted on some type of cloud storage, so that pulling the repo locally isn't cumbersome.
 
 To add support for pushing images to cloud storage, we provide a [postprocessor](https://github.com/airbnb/knowledge-repo/blob/master/resources/extract_images_to_s3.py). This file needs one line to be configured for your organization's cloud storage. Once configured, the postprocessor's registry key can be added to the knowledge git repository's configuration file as a postprocessor.
+
+### Managing and Viewing Tags
+
+Tags are one of the main organizing principles of the knowledge repo web app, and it is important to have high integrity on these tag names. For example, having one post tagged as "my_project" and another as "my-project" or "my_projects" prevents these posts from being organized together.
+
+We currently have two ways to maintain tag integrity:
+
+ - Browse the `/cluster?group_by=tags` endpoint to find and match existing tags.
+ - After contributing, organize tags in batch with the `/batch_tags` end point.
 
 ## Running the web app
 

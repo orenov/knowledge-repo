@@ -13,29 +13,55 @@ from .utils.time import time_since
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Some global aliases to be used below for enhanced readability
+LOCKED = CHECKED = '1'
+UNLOCKED = '0'
+
 
 def is_indexing():
-    return int(IndexMetadata.get('lock', 'index', '0'))
+    timeout = current_app.config.get("INDEXING_TIMEOUT", 10 * 60)  # Default index timeout to 10 minutes (after which indexing will be permitted to run again)
+    last_update = time_since_index()
+    return IndexMetadata.get('lock', 'index', UNLOCKED) == LOCKED and last_update is not None and (last_update < timeout)
 
 
 def time_since_index(human_readable=False):
     last_update = IndexMetadata.get_last_update('lock', 'index')
-    return time_since(last_update, human_readable=human_readable)
+    ts = time_since(last_update, human_readable=human_readable)
+    if human_readable:
+        if is_indexing():
+            return 'Currently indexing'
+        if ts is None:
+            return "Never"
+    return ts
 
 
 def time_since_index_check(human_readable=False):
     last_update = IndexMetadata.get_last_update('check', 'index')
+    if human_readable and last_update is None:
+        return "Never"
     return time_since(last_update, human_readable=human_readable)
 
 
-def update_index_required():
+def get_indexed_revisions():
+    indexed = {}
+    for uri in current_repo.uris.values():
+        indexed_revision = IndexMetadata.get('repository_revision', uri)
+        indexed[uri] = indexed_revision
+    return indexed
+
+
+def update_index_required(check_timeouts=True):
     if not current_app.config.get('REPOSITORY_INDEXING_ENABLED', True):
         return False
 
+    if is_indexing():
+        return False
+
+    interval = current_app.config.get("INDEXING_INTERVAL", 5 * 60)  # Default to 6 minutes between indexing tasks
     seconds = time_since_index()
     seconds_check = time_since_index_check()
 
-    if is_indexing() or (seconds is not None and seconds_check is not None) and (seconds < 5 * 60 or seconds_check < 5 * 60):
+    if check_timeouts and (seconds is not None and seconds_check is not None) and (seconds < interval or seconds_check < interval):
         return False
     try:
         for uri, revision in current_repo.revisions.items():
@@ -44,16 +70,16 @@ def update_index_required():
                 return True
         return False
     finally:
-        IndexMetadata.set('check', 'index', True)
+        IndexMetadata.set('check', 'index', CHECKED)
         db_session.commit()
 
 
-def update_index():
+def update_index(check_timeouts=True):
     """
     Initialize the db from a KnowledgeRepository object
     """
 
-    if not update_index_required():
+    if not update_index_required(check_timeouts=check_timeouts):
         return
 
     app = current_app._get_current_object()
@@ -67,16 +93,16 @@ def update_index():
         _update_index(current_app)
 
 
-def _update_index(app):
+def _update_index(app, force=False, reindex=False):
 
     context = None
     if not has_app_context():
         context = app.app_context()
         context.__enter__()
 
-    if is_indexing():
+    if not force and is_indexing():
         return
-    IndexMetadata.set('lock', 'index', True)
+    IndexMetadata.set('lock', 'index', LOCKED)
     db_session.commit()
 
     kr_dir = {kp.path: kp for kp in current_repo.posts()}
@@ -97,17 +123,13 @@ def _update_index(app):
             post.status = current_repo.PostStatus.UNPUBLISHED
             continue
 
-        # TODO(nikki_ray): This is to support the backfilling of this column. Remove this.
-        if not post.keywords:
-            post.keywords = get_keywords(post)
-
         # Update database according to current state of existing knowledge post and
         # remove from kp_dir. This means that when this loop finishes, kr_dir will
         # only contain posts which are new to the repo.
         kp = kr_dir.pop(post.path)
 
         # Update metadata of post if required
-        if (kp.revision > post.revision or not post.is_published or kp.uuid != post.uuid):
+        if reindex or (kp.revision > post.revision or not post.is_published or kp.uuid != post.uuid):
             if kp.is_valid():
                 logger.info('Recording update to post at: {}'.format(kp.path))
                 post.update_metadata_from_kp(kp)
@@ -130,7 +152,7 @@ def _update_index(app):
     for uri, revision in current_repo.revisions.items():
         IndexMetadata.set('repository_revision', uri, str(revision))
 
-    IndexMetadata.set('lock', 'index', False)
+    IndexMetadata.set('lock', 'index', UNLOCKED)
     db_session.commit()
 
     if context is not None:

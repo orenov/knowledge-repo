@@ -107,9 +107,7 @@ if (isinstance(args.repo, str) and not args.dev
         and os.path.exists(os.path.join(args.repo, '.resources', 'scripts', 'knowledge_repo'))
         and os.path.abspath(args.repo) != os.path.abspath(os.path.join(os.path.dirname(__file__), '../../'))):
     cmdline_args = ['--noupdate'] + [arg.replace(' ', '\ ') if ' ' in arg else arg for arg in sys.argv[1:]]
-    proc = subprocess.call('{} {}'.format(os.path.join(os.path.abspath(args.repo), '.resources/scripts/knowledge_repo'), ' '.join(cmdline_args)), shell=True)
-    return_code = proc.wait()
-    sys.exit(return_code)
+    sys.exit(subprocess.call('{} {}'.format(os.path.join(os.path.abspath(args.repo), '.resources/scripts/knowledge_repo'), ' '.join(cmdline_args)), shell=True))
 
 # ---------------------------------------------------------------------------------------
 # Everything below this line pertains to actual actions to be performed on the repository
@@ -186,6 +184,11 @@ db_upgrade.add_argument('-c', '--config', default=None, help="The config file fr
 db_upgrade.add_argument('-m', '--message', help="The message to use for the database revision.")
 db_upgrade.add_argument('--autogenerate', action='store_true', help="Whether alembic should automatically populate the migration script.")
 
+reindex = subparsers.add_parser('reindex', help='Update the index, updating all posts even if they exist in the database already; but will not lose post views and other usage metadata.')
+reindex.set_defaults(action='reindex')
+reindex.add_argument('-db', '--dburi', help='The SQLAlchemy database uri.')
+reindex.add_argument('-c', '--config', default=None, help="The config file from which to read server configuration.")
+
 # Show version and exit
 if args.version:
     print('Embedded/active version: {}'.format(knowledge_repo.__version__))
@@ -231,6 +234,7 @@ if args.action == 'create':
         raise ValueError("File already exists at '{}'. Please choose a different filename and try again.".format(args.filename))
     shutil.copy(src, args.filename)
     print("Created a {format} knowledge post template at {filename}.".format(format=args.format, filename=args.filename))
+    sys.exit(0)
 
 # # Check which branches have local work
 if args.action == 'drafts':
@@ -272,7 +276,7 @@ if args.action in ['preview', 'runserver']:
     if args.action == 'preview':
         kp_path = repo._kp_path(args.path)
         repo.set_active_draft(kp_path)  # TODO: Deprecate
-        url = 'http://127.0.0.1:{}/render?markdown={}'.format(args.port, kp_path)
+        url = 'http://127.0.0.1:{}/post/{}'.format(args.port, kp_path)
         threading.Timer(1.25, lambda: webbrowser.open(url)).start()
 
     KnowledgeDeployer.using('flask')(
@@ -305,3 +309,7 @@ elif args.action == 'db_upgrade':
 elif args.action == 'db_migrate':
     app = repo.get_app(debug=args.debug, db_uri=args.dburi)
     app.db_migrate(args.message, autogenerate=args.autogenerate)
+
+elif args.action == 'reindex':
+    app = repo.get_app(db_uri=args.dburi, debug=args.debug, config=args.config)
+    app.db_update_index(reindex=True)
